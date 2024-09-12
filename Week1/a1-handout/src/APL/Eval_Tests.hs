@@ -7,30 +7,30 @@ import APL.Eval (Val (..), envEmpty, eval)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
--- -- Consider this example when you have added the necessary constructors.
--- -- The Y combinator in a form suitable for strict evaluation.
--- yComb :: Exp
--- yComb =
---   Lambda "f" $
---     Apply
---       (Lambda "g" (Apply (Var "g") (Var "g")))
---       ( Lambda
---           "g"
---           ( Apply
---               (Var "f")
---               (Lambda "a" (Apply (Apply (Var "g") (Var "g")) (Var "a")))
---           )
---       )
+-- Consider this example when you have added the necessary constructors.
+-- The Y combinator in a form suitable for strict evaluation.
+yComb :: Exp
+yComb =
+  Lambda "f" $
+    Apply
+      (Lambda "g" (Apply (Var "g") (Var "g")))
+      ( Lambda
+          "g"
+          ( Apply
+              (Var "f")
+              (Lambda "a" (Apply (Apply (Var "g") (Var "g")) (Var "a")))
+          )
+      )
 
--- fact :: Exp
--- fact =
---   Apply yComb $
---     Lambda "rec" $
---       Lambda "n" $
---         If
---           (Eql (Var "n") (CstInt 0))
---           (CstInt 1)
---           (Mul (Var "n") (Apply (Var "rec") (Sub (Var "n") (CstInt 1))))
+fact :: Exp
+fact =
+  Apply yComb $
+    Lambda "rec" $
+      Lambda "n" $
+        If
+          (Eql (Var "n") (CstInt 0))
+          (CstInt 1)
+          (Mul (Var "n") (Apply (Var "rec") (Sub (Var "n") (CstInt 1))))
 
 tests :: TestTree
 tests = testGroup "All tests"
@@ -245,6 +245,25 @@ tests = testGroup "All tests"
       testCase "Pretty print tryCatch" $
         printExp (TryCatch (CstInt 1) (CstInt 2))
           @?= "(try 1 catch 2)"
+      --
+    ],
+    testGroup 
+    "Y Combinator and Factorial Tests"
+    [ testCase "Factorial of 0" $
+        eval envEmpty (Apply fact (CstInt 0))
+          @?= Right (ValInt 1),
+      --
+      testCase "Factorial of 1" $
+        eval envEmpty (Apply fact (CstInt 1))
+          @?= Right (ValInt 1),
+      --
+      testCase "Factorial of 5" $
+        eval envEmpty (Apply fact (CstInt 5))
+          @?= Right (ValInt 120),
+      --
+      testCase "Factorial of 10" $
+        eval envEmpty (Apply fact (CstInt 10))
+          @?= Right (ValInt 3628800)
       --
     ]
   ]
