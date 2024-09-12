@@ -184,7 +184,7 @@ tests = testGroup "All tests"
       --
       testCase "Pretty print var" $
         printExp (Var "Hello")
-          @?= "(Hello)",
+          @?= "Hello",
       --
       testCase "Pretty print let" $
         printExp (Let "x" (CstInt 2) (Var "x"))
