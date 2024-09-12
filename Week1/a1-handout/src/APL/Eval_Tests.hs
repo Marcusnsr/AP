@@ -263,7 +263,12 @@ tests = testGroup "All tests"
       --
       testCase "Factorial of 10" $
         eval envEmpty (Apply fact (CstInt 10))
-          @?= Right (ValInt 3628800)
+          @?= Right (ValInt 3628800),
+      --
+      {- testCase "Infinite recursion" $
+        eval envEmpty (Apply (Lambda "x" (Apply (Var "x") (Var "x"))) (Lambda "x" (Apply (Var "x") (Var "x"))))
+          @?= Left "Stack overflow" -- or a suitable error message for infinite recursion
+      -}
       --
     ]
   ]
