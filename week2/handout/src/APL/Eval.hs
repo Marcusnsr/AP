@@ -96,3 +96,9 @@ eval env (Eql e1 e2) = do
   case (x, y) of
     (ValInt x', ValInt y') -> pure $ ValBool $ x' == y'
     _ -> failure "Type error in equality comparison"
+eval env (If cond e1 e2) = do
+  x <- eval env cond
+  case x of
+    ValBool True -> eval env e1
+    ValBool False -> eval env e2
+    _ -> failure "Type error in if condition"
