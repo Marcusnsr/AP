@@ -82,13 +82,17 @@ eval env (Div e1 e2) = do
   x <- eval env e1
   y <- eval env e2
   case (x, y) of
-    (ValInt x', ValInt y') -> if y' == 0 then failure "Division by zero" else pure $ ValInt $ x' `div` y'
+    (ValInt x', ValInt y')
+      | y' == 0 -> failure "Division by zero"
+      | otherwise -> pure $ ValInt $ x' `div` y'
     _ -> failure "Type error in division"
 eval env (Pow e1 e2) = do
   x <- eval env e1
   y <- eval env e2
   case (x, y) of
-    (ValInt x', ValInt y') -> if y' < 0 then failure "Negative exponent" else pure $ ValInt $ x' ^ y'
+    (ValInt x', ValInt y')
+      | y' < 0 -> failure "Negative exponent"
+      | otherwise -> pure $ ValInt $ x' ^ y'
     _ -> failure "Type error in exponentiation"
 eval env (Eql e1 e2) = do
   x <- eval env e1
@@ -102,3 +106,4 @@ eval env (If cond e1 e2) = do
     ValBool True -> eval env e1
     ValBool False -> eval env e2
     _ -> failure "Type error in if condition"
+
