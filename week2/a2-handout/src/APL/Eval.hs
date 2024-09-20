@@ -1,5 +1,6 @@
 module APL.Eval
   ( Val (..),
+    Env,
     eval,
     runEval,
     Error,
@@ -27,14 +28,16 @@ envLookup :: VName -> Env -> Maybe Val
 envLookup v env = lookup v env
 
 type Error = String
-type State = [String]
+
+type State = ([String], [(Val, Val)])  -- (prints, key-value pairs)
+
 newtype EvalM a = EvalM (Env -> State -> Either Error (a, State))
 
 instance Functor EvalM where
   fmap = liftM
 
 instance Applicative EvalM where
-  pure x = EvalM $ \_env state -> Right (x, state) -- alt evalm skal tage state, og vi skal taenke over hvordan det saa skal goeres hvert sted
+  pure x = EvalM $ \_env state -> Right (x, state)
   (<*>) = ap
 
 instance Monad EvalM where
@@ -45,15 +48,11 @@ instance Monad EvalM where
         let EvalM y = f x'
          in y env state'
 
-
-evalPrint :: String -> EvalM ()
-evalPrint str = EvalM $ \_env state -> Right ((), str : state)
-
 askEnv :: EvalM Env
 askEnv = EvalM $ \env state -> Right (env, state)
 
 localEnv :: (Env -> Env) -> EvalM a -> EvalM a
-localEnv f (EvalM m) = EvalM $ \env -> m (f env)
+localEnv f (EvalM m) = EvalM $ \env state -> m (f env) state
 
 failure :: String -> EvalM a
 failure s = EvalM $ \_env _state -> Left s
@@ -61,16 +60,30 @@ failure s = EvalM $ \_env _state -> Left s
 catch :: EvalM a -> EvalM a -> EvalM a
 catch (EvalM m1) (EvalM m2) = EvalM $ \env state ->
   case m1 env state of
-    Left _ -> m2 env state  -- If m1 fails, run m2 with the same env and state
-    Right x -> Right x      -- If m1 succeeds, return its result (and state)
-
+    Left _ -> m2 env state
+    Right (x, state') -> Right (x, state')
+  
 runEval :: EvalM a -> ([String], Either Error a)
 runEval (EvalM m) = 
   let initialEnv = envEmpty
-      initialState = []  -- Or whatever your initial state is
+      initialState = ([], [])  -- (prints, store)
   in case m initialEnv initialState of
-      Left err -> ([], Left err)
-      Right (result, _finalState) -> ([], Right result)
+      Left err -> (fst initialState, Left err)  -- Captures initial prints
+      Right (result, (prints, _store)) -> (prints, Right result)
+
+evalPrint :: String -> EvalM ()
+evalPrint str = EvalM $ \_env (prints, store) -> Right ((), (prints ++ [str], store))
+
+evalKvPut :: Val -> Val -> EvalM ()
+evalKvPut key val = EvalM $ \_env (prints, store) ->
+  let newStore = (key, val) : filter ((/= key) . fst) store
+  in Right ((), (prints, newStore))
+
+evalKvGet :: Val -> EvalM Val
+evalKvGet key = EvalM $ \_env (prints, store) ->
+  case lookup key store of
+    Just val -> Right (val, (prints, store))
+    Nothing  -> Left "KvGet: key not found"
 
 
 evalIntBinOp :: (Integer -> Integer -> EvalM Integer) -> Exp -> Exp -> EvalM Val
@@ -139,10 +152,17 @@ eval (TryCatch e1 e2) =
   eval e1 `catch` eval e2
 eval (Print s e) = do
   v <- eval e
-  let vStr = case v of
-        ValInt i -> show i
+  let pVal = case v of
+        ValInt i  -> show i
         ValBool b -> show b
         ValFun _ _ _ -> "#<fun>"
-        _ -> "???unknown value bro"
-  evalPrint $ s ++ ": " ++ vStr
+  evalPrint (s ++ ": " ++ pVal)
   pure v
+eval (KvPut k_exp v_exp) = do
+  k <- eval k_exp
+  v <- eval v_exp
+  evalKvPut k v
+  pure v
+eval (KvGet k_exp) = do
+  k <- eval k_exp
+  evalKvGet k

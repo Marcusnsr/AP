@@ -4,6 +4,8 @@ module APL.AST
   )
 where
 
+import Control.Monad (ap, liftM)
+
 type VName = String
 
 data Exp
@@ -22,4 +24,6 @@ data Exp
   | Apply Exp Exp
   | TryCatch Exp Exp
   | Print String Exp
+  | KvPut Exp Exp
+  | KvGet Exp
   deriving (Eq, Show)
