@@ -21,4 +21,5 @@ data Exp
   | Lambda VName Exp
   | Apply Exp Exp
   | TryCatch Exp Exp
+  | Print String Exp
   deriving (Eq, Show)

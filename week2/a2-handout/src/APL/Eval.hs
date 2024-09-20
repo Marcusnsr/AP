@@ -27,41 +27,51 @@ envLookup :: VName -> Env -> Maybe Val
 envLookup v env = lookup v env
 
 type Error = String
-
-newtype EvalM a = EvalM (Env -> Either Error a)
+type State = [String]
+newtype EvalM a = EvalM (Env -> State -> Either Error (a, State))
 
 instance Functor EvalM where
   fmap = liftM
 
 instance Applicative EvalM where
-  pure x = EvalM $ \_env -> Right x
+  pure x = EvalM $ \_env state -> Right (x, state) -- alt evalm skal tage state, og vi skal taenke over hvordan det saa skal goeres hvert sted
   (<*>) = ap
 
 instance Monad EvalM where
-  EvalM x >>= f = EvalM $ \env ->
-    case x env of
+  EvalM x >>= f = EvalM $ \env state ->
+    case x env state of
       Left err -> Left err
-      Right x' ->
+      Right (x', state') ->
         let EvalM y = f x'
-         in y env
+         in y env state'
+
+
+evalPrint :: String -> EvalM ()
+evalPrint str = EvalM $ \_env state -> Right ((), str : state)
 
 askEnv :: EvalM Env
-askEnv = EvalM $ \env -> Right env
+askEnv = EvalM $ \env state -> Right (env, state)
 
 localEnv :: (Env -> Env) -> EvalM a -> EvalM a
 localEnv f (EvalM m) = EvalM $ \env -> m (f env)
 
 failure :: String -> EvalM a
-failure s = EvalM $ \_env -> Left s
+failure s = EvalM $ \_env _state -> Left s
 
 catch :: EvalM a -> EvalM a -> EvalM a
-catch (EvalM m1) (EvalM m2) = EvalM $ \env ->
-  case m1 env of
-    Left _ -> m2 env
-    Right x -> Right x
+catch (EvalM m1) (EvalM m2) = EvalM $ \env state ->
+  case m1 env state of
+    Left _ -> m2 env state  -- If m1 fails, run m2 with the same env and state
+    Right x -> Right x      -- If m1 succeeds, return its result (and state)
 
-runEval :: EvalM a -> Either Error a
-runEval (EvalM m) = m envEmpty
+runEval :: EvalM a -> ([String], Either Error a)
+runEval (EvalM m) = 
+  let initialEnv = envEmpty
+      initialState = []  -- Or whatever your initial state is
+  in case m initialEnv initialState of
+      Left err -> ([], Left err)
+      Right (result, _finalState) -> ([], Right result)
+
 
 evalIntBinOp :: (Integer -> Integer -> EvalM Integer) -> Exp -> Exp -> EvalM Val
 evalIntBinOp f e1 e2 = do
@@ -127,3 +137,12 @@ eval (Apply e1 e2) = do
       failure "Cannot apply non-function"
 eval (TryCatch e1 e2) =
   eval e1 `catch` eval e2
+eval (Print s e) = do
+  v <- eval e
+  let vStr = case v of
+        ValInt i -> show i
+        ValBool b -> show b
+        ValFun _ _ _ -> "#<fun>"
+        _ -> "???unknown value bro"
+  evalPrint $ s ++ ": " ++ vStr
+  pure v

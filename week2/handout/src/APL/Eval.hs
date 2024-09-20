@@ -50,6 +50,9 @@ instance Monad EvalM where
 failure :: String -> EvalM a
 failure s = EvalM $ Left s
 
+catch :: EvalM a -> EvalM a -> EvalM a
+
+
 runEval :: EvalM a -> Either Error a
 runEval (EvalM x) = x
 
@@ -106,4 +109,16 @@ eval env (If cond e1 e2) = do
     ValBool True -> eval env e1
     ValBool False -> eval env e2
     _ -> failure "Type error in if condition"
-
+eval env (Let v e1 e2) = do
+  x <- eval env e1
+  eval (envExtend v x env) e2
+eval env (Lambda v e) = 
+  pure $ ValFun env v e
+eval env (Apply e1 e2) = do
+  x <- eval env e1
+  y <- eval env e2
+  case (x, y) of
+    (ValFun env' v e', _) -> eval (envExtend v y env') e'
+    _ -> failure "Type error in function application"
+eval env (TryCatch e1 e2) =
+  eval env e1 `catch` eval env e2
