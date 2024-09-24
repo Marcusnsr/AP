@@ -64,5 +64,23 @@ tests =
         "Lexing edge cases"
         [ parserTest "2 " $ CstInt 2,
           parserTest " 2" $ CstInt 2
+        ],
+      testGroup
+        "Equality and Power Operators"
+        [ parserTest "x**y" $ Pow (Var "x") (Var "y"),
+          parserTest "x**y**z" $ Pow (Var "x") (Pow (Var "y") (Var "z")),
+          parserTest "x==y" $ Eql (Var "x") (Var "y"),
+          parserTest "x==y==z" $ Eql (Eql (Var "x") (Var "y")) (Var "z"),
+          parserTest "x*y**z" $ Mul (Var "x") (Pow (Var "y") (Var "z")),
+          parserTest "x+y==y+x" $ Eql (Add (Var "x") (Var "y")) (Add (Var "y") (Var "x")),
+          parserTest "x**y*z" $ Mul (Pow (Var "x") (Var "y")) (Var "z"),
+          parserTestFail "x**",
+          parserTestFail "x==",
+          parserTestFail "x***y",
+          parserTestFail "x==*y",
+          parserTestFail "*x==y",
+          parserTestFail "x**y**",
+          parserTestFail "x==y==",
+          parserTestFail "==x==y"
         ]
     ]
