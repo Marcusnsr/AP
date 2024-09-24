@@ -82,5 +82,44 @@ tests =
           parserTestFail "x**y**",
           parserTestFail "x==y==",
           parserTestFail "==x==y"
+        ],
+      testGroup
+        "Function application"
+        [ parserTest "x y z" $ Apply (Apply (Var "x") (Var "y")) (Var "z"),
+          parserTest "x(y z)" $ Apply (Var "x") (Apply (Var "y") (Var "z")),
+          parserTest "g(1 2)" $ Apply (Var "g") (Apply (CstInt 1) (CstInt 2)),
+          parserTest "true false" $ Apply (CstBool True) (CstBool False),
+          parserTestFail "x if x then y else z"  -- Expecting a parse error
+        ],
+            -- New test group for 'put' construct
+      testGroup
+        "Put construct"
+        [ parserTest "put x y" $ KvPut (Var "x") (Var "y"),
+          parserTest "put x+1 y*2" $
+            KvPut (Add (Var "x") (CstInt 1)) (Mul (Var "y") (CstInt 2)),
+          parserTest "put (x + y) (z * w)" $
+            KvPut (Add (Var "x") (Var "y")) (Mul (Var "z") (Var "w")),
+          parserTestFail "put x",
+          parserTestFail "put"
+        ],
+      -- New test group for 'get' construct
+      testGroup
+        "Get construct"
+        [ parserTest "get x" $ KvGet (Var "x"),
+          parserTest "get x + y" $ KvGet (Add (Var "x") (Var "y")),
+          parserTest "get (x * y)" $ KvGet (Mul (Var "x") (Var "y")),
+          parserTestFail "get",
+          parserTestFail "get x y"
+        ],
+      -- New test group for 'print' construct
+      testGroup
+        "Print construct"
+        [ parserTest "print \"Value:\" x" $ Print "Value:" (Var "x"),
+          parserTest "print \"Sum:\" x + y" $
+            Print "Sum:" (Add (Var "x") (Var "y")),
+          parserTest "print \"Product:\" x * y" $
+            Print "Product:" (Mul (Var "x") (Var "y")),
+          parserTestFail "print \"Missing expr\"",
+          parserTestFail "print x"
         ]
     ]
