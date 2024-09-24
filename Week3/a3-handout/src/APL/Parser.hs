@@ -1,6 +1,7 @@
 module APL.Parser (parseAPL) where
 
 import APL.AST (Exp (..), VName)
+import Control.Applicative ((<|>))  -- Added this line to use <|>
 import Control.Monad (void)
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Void (Void)
@@ -76,14 +77,23 @@ pAtom =
     ]
 
 pLExp :: Parser Exp
-pLExp =
-  choice
-    [ If
-        <$> (lKeyword "if" *> pExp)
-        <*> (lKeyword "then" *> pExp)
-        <*> (lKeyword "else" *> pExp),
-      pAtom
-    ]
+pLExp = choice
+  [ If
+      <$> (lKeyword "if" *> pExp)
+      <*> (lKeyword "then" *> pExp)
+      <*> (lKeyword "else" *> pExp),
+    chainl1 pAtom (pure Apply) -- Allow for left associativity
+  ]
+
+chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
+chainl1 p op = do
+  x <- p
+  rest x
+  where
+    rest x = (do
+      f <- op
+      y <- p
+      rest (f x y)) <|> pure x
 
 pExp1 :: Parser Exp
 pExp1 = pLExp >>= chain
