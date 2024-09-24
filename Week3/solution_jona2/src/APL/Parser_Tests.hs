@@ -64,5 +64,13 @@ tests =
         "Lexing edge cases"
         [ parserTest "2 " $ CstInt 2,
           parserTest " 2" $ CstInt 2
+        ],
+      testGroup
+        "Function application"
+        [ parserTest "x y z" $ Apply (Apply (Var "x") (Var "y")) (Var "z"),
+          parserTest "x(y z)" $ Apply (Var "x") (Apply (Var "y") (Var "z")),
+          parserTest "g(1 2)" $ Apply (Var "g") (Apply (CstInt 1) (CstInt 2)),
+          parserTest "true false" $ Apply (CstBool True) (CstBool False),
+          parserTestFail "x if x then y else z"  -- Expecting a parse error
         ]
     ]
