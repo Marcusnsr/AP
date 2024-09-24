@@ -70,5 +70,11 @@ tests =
         [ parserTest "x y z" $ Apply (Apply (Var "x") (Var "y")) (Var "z"),
           parserTest "x(y z)" $ Apply (Var "x") (Apply (Var "y") (Var "z")),
           parserTestFail "x if x then y else z"  -- Expecting a parse error
-        ]
+        ],
+      testGroup
+        "Equality and power operators"
+        [ parserTest "x=y" $ Eq (Var "x") (Var "y"),
+          parserTest "x==y" $ Eq (Var "x") (Var "y"),
+          parserTest "x**y" $ Pow (Var "x") (Var "y")
+        ],
     ]
