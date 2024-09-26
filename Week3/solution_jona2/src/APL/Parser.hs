@@ -176,8 +176,7 @@ pPrint = do
 pGet :: Parser Exp
 pGet = do
   lKeyword "get"
-  e <- pExp00
-  notFollowedBy pAtom  -- Ensure no additional arguments
+  e <- pAtom
   pure $ KvGet e
 
 pPut :: Parser Exp
