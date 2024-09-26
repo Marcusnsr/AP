@@ -177,13 +177,14 @@ pGet :: Parser Exp
 pGet = do
   lKeyword "get"
   e <- pExp00
+  notFollowedBy pAtom  -- Ensure no additional arguments
   pure $ KvGet e
 
 pPut :: Parser Exp
 pPut = do
   lKeyword "put"
-  e1 <- pExp00
-  e2 <- pExp00
+  e1 <- pAtom
+  e2 <- pAtom
   pure $ KvPut e1 e2
 
 pExp :: Parser Exp
