@@ -98,6 +98,8 @@ tests =
             KvPut (Add (Var "x") (CstInt 1)) (Mul (Var "y") (CstInt 2)),
           parserTest "put (x + y) (z * w)" $
             KvPut (Add (Var "x") (Var "y")) (Mul (Var "z") (Var "w")),
+          parserTest "put ((x + 1) * z) (y - 2)" $
+            KvPut (Mul (Add (Var "x") (CstInt 1)) (Var "z")) (Sub (Var "y") (CstInt 2)),
           parserTestFail "put x",
           parserTestFail "put"
         ],
@@ -106,6 +108,7 @@ tests =
         [ parserTest "get x" $ KvGet (Var "x"),
           parserTest "get (x + y)" $ KvGet (Add (Var "x") (Var "y")),
           parserTest "get (x * y)" $ KvGet (Mul (Var "x") (Var "y")),
+          parserTest "get ((x + 2) * y)" $ KvGet (Mul (Add (Var "x") (CstInt 2)) (Var "y")),
           parserTestFail "get",
           parserTestFail "get x y",
           parserTestFail "get x + y"
