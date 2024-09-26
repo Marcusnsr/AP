@@ -119,5 +119,34 @@ tests =
             Print "Product:" (Mul (Var "x") (Var "y")),
           parserTestFail "print \"Missing expr\"",
           parserTestFail "print x"
+        ],
+        testGroup
+        "Lambda expressions"
+        [ parserTest "\\x -> x + 1" $
+            Lambda "x" (Add (Var "x") (CstInt 1)),
+          parserTest "\\x -> \\y -> x + y" $
+            Lambda "x" (Lambda "y" (Add (Var "x") (Var "y"))),
+          parserTest "\\x -> x y" $
+            Lambda "x" (Apply (Var "x") (Var "y")),
+          parserTestFail "\\if -> x" -- 'if' is a keyword, should fail
+        ],
+
+      testGroup
+        "Let-binding expressions"
+        [ parserTest "let x = y in z" $
+            Let "x" (Var "y") (Var "z"),
+          parserTest "let x = 5 in x + 1" $
+            Let "x" (CstInt 5) (Add (Var "x") (CstInt 1)),
+          parserTestFail "let true = y in z", -- 'true' is a keyword
+          parserTestFail "x let v = 2 in v"
+        ],
+
+      testGroup
+        "Try-catch expressions"
+        [ parserTest "try x + y catch z" $
+            TryCatch (Add (Var "x") (Var "y")) (Var "z"),
+          parserTest "try get x catch put x y" $
+            TryCatch (KvGet (Var "x")) (KvPut (Var "x") (Var "y")),
+          parserTestFail "try x catch" -- Missing expression after 'catch'
         ]
     ]

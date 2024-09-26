@@ -88,10 +88,27 @@ pFExp = do
   args <- many pAtom
   pure $ foldl Apply f args
 
+lSymbol :: String -> Parser ()
+lSymbol s = lexeme $ void $ chunk s
+
 pLExp :: Parser Exp
 pLExp =
   choice
-    [ If
+    [ --Lambda exps
+      Lambda
+        <$> (lSymbol "\\" *> lVName)
+        <*> (lSymbol "->" *> pExp),
+      -- Try-catch exps
+      TryCatch
+        <$> (lKeyword "try" *> pExp)
+        <*> (lKeyword "catch" *> pExp),
+      -- Let-binding exps
+      Let
+        <$> (lKeyword "let" *> lVName)
+        <*> (lSymbol "=" *> pExp)
+        <*> (lKeyword "in" *> pExp),
+      -- If-then-else exps
+      If
         <$> (lKeyword "if" *> pExp00)
         <*> (lKeyword "then" *> pExp00)
         <*> (lKeyword "else" *> pExp00),
