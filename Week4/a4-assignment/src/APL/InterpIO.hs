@@ -62,8 +62,30 @@ runEvalIO evalm = do
     runEvalIO' :: Env -> FilePath -> EvalM a -> IO (Either Error a)
     runEvalIO' _ _ (Pure x) = pure $ pure x
     runEvalIO' r db (Free (ReadOp k)) = runEvalIO' r db $ k r
-    runEvalIO' r db (Free (StateGetOp k)) = error "TODO in Task 3"
-    runEvalIO' r db (Free (StatePutOp s m)) = error "TODO in Task 3"
+    runEvalIO' r db (Free (StateGetOp k)) = do -- Handle state retrieval (StateGetOp)
+      dbState <- readDB db
+      case dbState of
+        Left err -> pure $ Left err
+        Right state -> runEvalIO' r db (k state)
+    runEvalIO' r db (Free (StatePutOp s m)) = do -- Handle state update (StatePutOp)
+      writeDB db s
+      runEvalIO' r db m
+    runEvalIO' r db (Free (KvGetOp key k)) = do -- Handle key-value retrieval (KvGetOp)
+      dbState <- readDB db
+      case dbState of
+        Left err -> pure $ Left err
+        Right state ->
+          case lookup key state of
+            Just val -> runEvalIO' r db (k val)
+            Nothing -> pure $ Left $ "Key not found: " ++ show key
+    runEvalIO' r db (Free (KvPutOp key val m)) = do -- Handle key-value insertion (KvPutOp)
+      dbState <- readDB db
+      case dbState of
+        Left err -> pure $ Left err
+        Right state -> do
+          let newState = (key, val) : filter ((/= key) . fst) state
+          writeDB db newState
+          runEvalIO' r db m
     runEvalIO' r db (Free (PrintOp p m)) = do
       putStrLn p
       runEvalIO' r db m
