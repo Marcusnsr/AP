@@ -70,14 +70,25 @@ runEvalIO evalm = do
     runEvalIO' r db (Free (StatePutOp s m)) = do -- Handle state update (StatePutOp)
       writeDB db s
       runEvalIO' r db m
-    runEvalIO' r db (Free (KvGetOp key k)) = do -- Handle key-value retrieval (KvGetOp)
+    runEvalIO' r db (Free (KvGetOp key k)) = do
+      -- Read the current state from the database
       dbState <- readDB db
       case dbState of
-        Left err -> pure $ Left err
-        Right state ->
+        Left err -> pure $ Left err  -- Handle read error
+        Right state -> 
           case lookup key state of
-            Just val -> runEvalIO' r db (k val)
-            Nothing -> pure $ Left $ "Key not found: " ++ show key
+            Just val -> runEvalIO' r db $ k val  -- Key found, return the value
+            Nothing -> do
+              -- Key not found, prompt for replacement
+              putStrLn $ "Invalid key: " ++ show key ++ ". Enter a replacement: "
+              userInput <- prompt ""
+              case readVal userInput of
+                Just newVal -> do
+                  -- Successfully parsed the new value, continue with it
+                  runEvalIO' r db $ k newVal
+                Nothing -> 
+                  -- Failed to parse input, return an error
+                  pure $ Left $ "Invalid value input: " ++ userInput
     runEvalIO' r db (Free (KvPutOp key val m)) = do -- Handle key-value insertion (KvPutOp)
       dbState <- readDB db
       case dbState of

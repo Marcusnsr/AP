@@ -145,8 +145,12 @@ getputTests =
               val2 <- evalKvGet (ValInt 43)  -- Should return True
               return (val1, val2)
           )
-          @?= ([], Right (ValInt 200, ValBool True))  -- Ensure both values are correct
+          @?= ([], Right (ValInt 200, ValBool True)),  -- Ensure both values are correct
       --
+      testCase "Missing key test" $ do
+        (_, res) <- captureIO ["ValInt 1"] $  -- Simulate user input
+          runEvalIO $ Free $ KvGetOp (ValInt 0) $ \val -> pure val
+        res @?= Right (ValInt 1)  -- Ensure the returned value matches expected input
     ]
 
 ioTests :: TestTree
