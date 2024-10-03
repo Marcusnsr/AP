@@ -16,7 +16,7 @@ evalIO' :: Exp -> IO (Either Error Val)
 evalIO' = runEvalIO . eval
 
 tests :: TestTree
-tests = testGroup "Free monad interpreters" [pureTests, ioTests]
+tests = testGroup "Free monad interpreters" [pureTests, ioTests, getputTests, tryCatchTests]
 
 pureTests :: TestTree
 pureTests =
@@ -65,10 +65,14 @@ pureTests =
       --
       testCase "Div0" $
         eval' (Div (CstInt 7) (CstInt 0))
-          @?= ([], Left "Division by zero"),
-      --
-      -- New tests for KvGetOp and KvPutOp
-      testCase "KvPut and KvGet" $
+          @?= ([], Left "Division by zero")
+    ]
+
+getputTests :: TestTree
+getputTests =
+  testGroup
+    "KvGetOp and KvPutOp Tests"
+    [ testCase "KvPut and KvGet" $
         runEval
           ( do
               evalKvPut (ValInt 42) (ValInt 100)
@@ -129,7 +133,19 @@ pureTests =
               evalKvPut (ValBool True) (ValInt 100)
               evalKvGet (ValBool True)
           )
-          @?= ([], Right (ValInt 100))  -- Using a boolean as a key
+          @?= ([], Right (ValInt 100)),  -- Using a boolean as a key
+      --
+      testCase "Database integrity after multiple operations" $
+        runEval
+          ( do
+              evalKvPut (ValInt 42) (ValInt 100)
+              evalKvPut (ValInt 43) (ValBool True)
+              evalKvPut (ValInt 42) (ValInt 200)  -- Overwrite key 42
+              val1 <- evalKvGet (ValInt 42)  -- Should return 200
+              val2 <- evalKvGet (ValInt 43)  -- Should return True
+              return (val1, val2)
+          )
+          @?= ([], Right (ValInt 200, ValBool True))  -- Ensure both values are correct
       --
     ]
 
