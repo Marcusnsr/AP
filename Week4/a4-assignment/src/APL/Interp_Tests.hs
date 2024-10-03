@@ -158,3 +158,31 @@ ioTests =
         --              CstInt 1
         --    (out, res) @?= (["This is 1: 1", "This is also 1: 1"], Right $ ValInt 1)
     ]
+
+-- NEW TESTS FOR TryCatchOp
+tryCatchTests :: TestTree
+tryCatchTests =
+  testGroup
+    "TryCatchOp Tests"
+    [ testCase "TryCatchOp with failure" $
+        let test1 :: ([String], Either Error String)
+            test1 = runEval $ Free $ TryCatchOp (failure "Oh no!") (pure "Success!")
+        in test1 @?= ([], Right "Success!"),
+      --
+      testCase "TryCatch with division by zero" $
+        let divZero :: Exp
+            divZero = CstInt 1 `Div` CstInt 0
+            test2 :: ([String], Either Error Val)
+            test2 = runEval $ eval $ TryCatch (CstInt 5) divZero
+        in test2 @?= ([], Right (ValInt 5)),
+      --
+      testCase "TryCatch with bad equality check" $ do
+        let divZero :: Exp
+            divZero = CstInt 1 `Div` CstInt 0
+            badEql :: Exp
+            badEql = CstInt 0 `Eql` CstBool True
+            test3 :: IO (Either Error Val)
+            test3 = runEvalIO $ eval $ TryCatch badEql divZero
+        res <- test3
+        res @?= Left "Division by zero"
+    ]
