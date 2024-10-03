@@ -20,7 +20,7 @@ runEval = runEval' envEmpty stateInitial
               let (ps2, res2) = runEval' r s m2
                in (ps1 ++ ps2, res2) -- Troels kører også "in case" med et single space indent ¯\_(ツ)_/¯ 
             Right x -> (ps1, Right x)
-    runEval' _ _ (Free (ErrorOp e)) = ([], Left e) -- Samme som før!  -- Handle ErrorOp by returning an error message
+    runEval' _ _ (Free (ErrorOp e)) = ([], Left e) -- Handle ErrorOp by returning an error message
 
     -- Handle KvGetOp
     runEval' r s (Free (KvGetOp key k)) =
