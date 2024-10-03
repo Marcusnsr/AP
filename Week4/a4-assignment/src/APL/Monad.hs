@@ -76,6 +76,8 @@ data EvalOp a
   | StatePutOp State a
   | PrintOp String a
   | ErrorOp Error
+  | KvGetOp Val (Val -> a)      -- New constructor for getting a value from the store
+  | KvPutOp Val Val a           -- New constructor for putting a value into the store
 
 instance Functor EvalOp where
   fmap f (ReadOp k) = ReadOp $ f . k
@@ -83,6 +85,9 @@ instance Functor EvalOp where
   fmap f (StatePutOp s m) = StatePutOp s $ f m
   fmap f (PrintOp p m) = PrintOp p $ f m
   fmap _ (ErrorOp e) = ErrorOp e
+  fmap f (KvGetOp v k) = KvGetOp v (f . k)      -- Update Functor for KvGetOp
+  fmap f (KvPutOp k v m) = KvPutOp k v $ f m    -- Update Functor for KvPutOp
+
 
 type EvalM a = Free EvalOp a
 
@@ -120,10 +125,10 @@ catch :: EvalM a -> EvalM a -> EvalM a
 catch = error "TODO"
 
 evalKvGet :: Val -> EvalM Val
-evalKvGet = error "TODO"
+evalKvGet key = Free $ KvGetOp key pure  -- Pure continuation with the retrieved value
 
 evalKvPut :: Val -> Val -> EvalM ()
-evalKvPut = error "TODO"
+evalKvPut key val = Free $ KvPutOp key val $ pure ()  -- Pure continuation after the put operation
 
 transaction :: EvalM () -> EvalM ()
 transaction = error "TODO"

@@ -65,7 +65,72 @@ pureTests =
       --
       testCase "Div0" $
         eval' (Div (CstInt 7) (CstInt 0))
-          @?= ([], Left "Division by zero")
+          @?= ([], Left "Division by zero"),
+      --
+      -- New tests for KvGetOp and KvPutOp
+      testCase "KvPut and KvGet" $
+        runEval
+          ( do
+              evalKvPut (ValInt 42) (ValInt 100)
+              evalKvGet (ValInt 42)
+          )
+          @?= ([], Right (ValInt 100)),  -- The value 100 should be retrieved
+      --
+      testCase "KvGet missing key" $
+        runEval
+          ( do
+              evalKvGet (ValInt 999)  -- Key 999 has not been put in the state
+          )
+          @?= ([], Left "Key not found: ValInt 999"),  -- Should return an error message
+      --
+      testCase "KvPut overwrite existing key" $
+        runEval
+          ( do
+              evalKvPut (ValInt 42) (ValInt 100)
+              evalKvPut (ValInt 42) (ValInt 200)  -- Overwrite the value for key 42
+              evalKvGet (ValInt 42)
+          )
+          @?= ([], Right (ValInt 200)),  -- The updated value 200 should be retrieved
+      --
+      testCase "KvPut multiple keys" $
+        runEval
+          ( do
+              evalKvPut (ValInt 1) (ValInt 10)
+              evalKvPut (ValInt 2) (ValInt 20)
+              val1 <- evalKvGet (ValInt 1)
+              val2 <- evalKvGet (ValInt 2)
+              return (val1, val2)
+          )
+          @?= ([], Right (ValInt 10, ValInt 20)),  -- Ensure both values are correct
+      --
+      testCase "KvPut and KvGet order of operations" $
+        runEval
+          ( do
+              evalKvPut (ValInt 1) (ValInt 10)
+              val1 <- evalKvGet (ValInt 1)
+              evalKvPut (ValInt 2) (ValInt 20)
+              val2 <- evalKvGet (ValInt 2)
+              evalKvPut (ValInt 1) (ValInt 100)  -- Overwrite key 1
+              val1Updated <- evalKvGet (ValInt 1)
+              return (val1, val2, val1Updated)
+          )
+          @?= ([], Right (ValInt 10, ValInt 20, ValInt 100)),  -- Verify the correct sequence
+      --
+      testCase "KvGet from empty state" $
+        runEval
+          ( do
+              evalKvGet (ValInt 1)  -- No key has been added yet
+          )
+          @?= ([], Left "Key not found: ValInt 1"),
+      --
+      testCase "KvPut and KvGet with non-integer key" $
+        runEval
+          ( do
+              evalKvPut (ValBool True) (ValInt 100)
+              evalKvGet (ValBool True)
+          )
+          @?= ([], Right (ValInt 100))  -- Using a boolean as a key
+      --
     ]
 
 ioTests :: TestTree
