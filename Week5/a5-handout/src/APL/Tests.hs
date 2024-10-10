@@ -71,11 +71,11 @@ instance Arbitrary Exp where
   shrink (CstInt _) = []
   shrink (CstBool _) = []
 
-genVarName :: Gen VName
-genVarName = frequency
-  [ (5, genVarNameWithLength 2 4) -- 50% chance
-  , (5, arbitrary)                -- 50% chance
-  ]
+-- genVarName :: Gen VName
+-- genVarName = frequency
+--   [ (7, genVarNameWithLength 2 4) -- at least 50% chance
+--   , (3, arbitrary)                
+--   ]
 
 genVarNameWithLength :: Int -> Int -> Gen VName
 genVarNameWithLength minLen maxLen = do
@@ -87,24 +87,32 @@ genVarChar :: Gen Char
 genVarChar = elements $ ['a'..'z'] ++ ['A'..'Z']
 
 genExp :: Int -> [VName] -> Gen Exp
-genExp size vars 
-  | size <= 0 = CstInt <$> arbitrary -- Base case: when size is zero or less
-  | otherwise = frequency
-  [ (3, CstInt <$> arbitrary)
-  , (2, CstBool <$> arbitrary)
-  , (5, if null vars then genNewVar else Var <$> elements vars)
-  , (5, genBinaryOp Add vars)
-  , (5, genBinaryOp Sub vars)
-  , (5, genBinaryOp Mul vars)
-  , (5, genDiv vars)
-  , (5, genPow vars)
-  , (5, genEql vars)
-  , (5, genIf vars)
-  , (5, genLet vars)
-  , (3, genLambda vars)
-  , (3, genApply vars)
-  , (3, genTryCatch vars)
-  ]
+genExp size vars
+  | size <= 0 = frequency
+      [ (4, CstInt <$> arbitrary)
+      , (1, Var <$> genVarNameWithLength 2 4) -- Increase non-trivial variables
+      ]
+  | otherwise = do
+      let varGen =
+            [ (200, Var <$> elements vars) | not (null vars) ] ++
+            [ (1, Var <$> genVarNameWithLength 2 4) ] -- Potential variable errors
+      frequency $ concat
+        [ [(3, CstInt <$> arbitrary)
+          , (2, CstBool <$> arbitrary)]
+        , varGen
+        , [ (4, genBinaryOp Add vars)
+          , (4, genBinaryOp Sub vars)
+          , (4, genBinaryOp Mul vars)
+          , (3, genDiv vars)    -- Decreased weight
+          , (3, genPow vars)    -- Decreased weight
+          , (4, genEql vars)
+          , (4, genIf vars)
+          , (6, genLet vars)    -- Increased weight
+          , (6, genLambda vars) -- Increased weight
+          , (3, genApply vars)
+          , (3, genTryCatch vars)
+          ]
+        ]
   where
     genBinaryOp op varList = do
       e1 <- genExp (size `div` 2) varList
@@ -145,13 +153,13 @@ genExp size vars
       return $ If cond e1 e2
 
     genLet varList = do
-      var <- genVarName
+      var <- genVarNameWithLength 2 4
       e1 <- genExp (size `div` 2) varList
       e2 <- genExp (size `div` 2) (var : varList)
       return $ Let var e1 e2
 
     genLambda varList = do
-      var <- genVarName
+      var <- genVarNameWithLength 2 4
       body <- genExp (size - 1) (var : varList)
       return $ Lambda var body
 
@@ -164,10 +172,6 @@ genExp size vars
       e1 <- genExp (size `div` 2) varList
       e2 <- genExp (size `div` 2) varList
       return $ TryCatch e1 e2
-
-    genNewVar = do
-      var <- genVarName
-      return $ Var var
 
 expCoverage :: Exp -> Property
 expCoverage e = checkCoverage
