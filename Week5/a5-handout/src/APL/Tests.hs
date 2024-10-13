@@ -89,7 +89,7 @@ genVarChar = elements $ ['a'..'z'] ++ ['A'..'Z']
 genExp :: Int -> [VName] -> Gen Exp
 genExp size vars
   | size <= 0 = frequency
-      [ (4, CstInt <$> arbitrary)
+      [ (30, CstInt <$> arbitrary)
       , (1, Var <$> genVarNameWithLength 2 4) -- Increase non-trivial variables
       ]
   | otherwise = do
