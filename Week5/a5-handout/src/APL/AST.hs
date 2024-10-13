@@ -32,7 +32,9 @@ printBinOp :: String -> Exp -> Exp -> String
 printBinOp op x y = parens $ printExp x ++ " " ++ op ++ " " ++ printExp y
 
 printExp :: Exp -> String
-printExp (CstInt x) = show x
+printExp (CstInt x)
+  | x < 0     = "(" ++ show x ++ ")"
+  | otherwise = show x
 printExp (CstBool b) = if b then "true" else "false"
 printExp (Add x y) = printBinOp "+" x y
 printExp (Sub x y) = printBinOp "-" x y

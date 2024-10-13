@@ -2,6 +2,7 @@ module APL.Parser (parseAPL) where
 
 import APL.AST (Exp (..), VName)
 import Control.Monad (void)
+import Control.Applicative (optional)
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Void (Void)
 import Text.Megaparsec
@@ -15,9 +16,10 @@ import Text.Megaparsec
     parse,
     satisfy,
     some,
-    try,
+    try
   )
-import Text.Megaparsec.Char (space)
+import Text.Megaparsec.Char (char, digitChar, space)
+
 
 type Parser = Parsec Void String
 
@@ -47,8 +49,13 @@ lVName = lexeme $ try $ do
     else pure v
 
 lInteger :: Parser Integer
-lInteger =
-  lexeme $ read <$> some (satisfy isDigit) <* notFollowedBy (satisfy isAlphaNum)
+lInteger = lexeme $ do
+  sign <- optional (lString "-")
+  digits <- some (satisfy isDigit)
+  let num = read digits
+  return $ case sign of
+    Just _  -> -num
+    Nothing -> num
 
 lString :: String -> Parser ()
 lString s = lexeme $ void $ chunk s

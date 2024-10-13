@@ -3,10 +3,11 @@ module APL.Tests
   )
 where
 
-import APL.AST (Exp (..), subExp, VName)
+import APL.AST (Exp (..), subExp, VName, printExp)
 import APL.Error (isVariableError, isDomainError, isTypeError)
 import APL.Check (checkExp)
 import Data.Char()
+import APL.Parser (parseAPL) -- import parser
 import Test.QuickCheck
   ( Property
   , Gen
@@ -19,8 +20,9 @@ import Test.QuickCheck
   , frequency
   , elements
   , suchThat
+  , counterexample
   )
-
+import Test.QuickCheck.Monadic (monadicIO, run)
 instance Arbitrary Exp where
   arbitrary = sized (\n -> genExp n [])
 
@@ -80,8 +82,12 @@ instance Arbitrary Exp where
 genVarNameWithLength :: Int -> Int -> Gen VName
 genVarNameWithLength minLen maxLen = do
   len <- elements [minLen..maxLen]
-  name <- sequence $ replicate len genVarChar
+  -- Ensure the generated name is not a keyword
+  name <- suchThat (sequence $ replicate len genVarChar) (\v -> not (v `elem` keywords))
   return name
+
+keywords :: [String]
+keywords = ["if", "then", "else", "true", "false", "let", "in", "try", "catch"]
 
 genVarChar :: Gen Char
 genVarChar = elements $ ['a'..'z'] ++ ['A'..'Z']
@@ -184,8 +190,15 @@ expCoverage e = checkCoverage
   . cover 50 (or [2 <= n && n <= 4 | Var v <- subExp e, let n = length v]) "non-trivial variable"
   $ ()
 
-parsePrinted :: Exp -> Bool
-parsePrinted _ = undefined
+parsePrinted :: Exp -> Property
+parsePrinted e =
+  case parseAPL "" (printExp e) of
+    Right e' ->
+      if e == e'
+        then property True
+        else counterexample ("Original: " ++ show e ++ "\nParsed:   " ++ show e') False
+    Left err ->
+      counterexample ("Parse error: " ++ err) False
 
 onlyCheckedErrors :: Exp -> Bool
 onlyCheckedErrors _ = undefined
