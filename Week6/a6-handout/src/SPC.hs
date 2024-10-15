@@ -91,7 +91,10 @@ type WorkerName = String
 
 -- | Messages sent to workers. These are sent both by SPC and by
 -- processes spawned by the workes.
-data WorkerMsg -- TODO: add messages.
+-- Messages sent to workers.
+data WorkerMsg
+  = MsgWorkerJob JobId Job
+  | MsgWorkerTerminate
 
 -- Messages sent to SPC.
 data SPCMsg
@@ -105,6 +108,10 @@ data SPCMsg
     MsgJobWait JobId (ReplyChan JobDoneReason)
   | -- | Some time has passed.
     MsgTick
+  -- New messages for workers
+  | MsgWorkerAdd WorkerName (ReplyChan (Either String Worker))
+  | MsgWorkerIdle WorkerName
+  | MsgJobDone JobId JobDoneReason WorkerName
 
 -- | A handle to the SPC instance.
 data SPC = SPC (Server SPCMsg)
@@ -117,8 +124,10 @@ data SPCState = SPCState
   { spcJobsPending :: [(JobId, Job)],
     spcJobsRunning :: [(JobId, Job)],
     spcJobsDone :: [(JobId, JobDoneReason)],
-    spcJobCounter :: JobId
-    -- TODO: you will need to add more fields.
+    spcJobCounter :: JobId,
+    -- New fields for workers
+    spcWorkers :: [(WorkerName, Worker)],
+    spcIdleWorkers :: [WorkerName]
   }
 
 -- | The monad in which the main SPC thread runs. This is a state
@@ -163,7 +172,23 @@ runSPCM :: SPCState -> SPCM a -> IO a
 runSPCM state (SPCM f) = fst <$> f state
 
 schedule :: SPCM ()
-schedule = undefined
+schedule = do
+  state <- get
+  case (spcIdleWorkers state, spcJobsPending state) of
+    (workerName : idleWorkers, (jobId, job) : pendingJobs) -> do
+      let Just worker = lookup workerName (spcWorkers state)
+      put $ state
+        { spcIdleWorkers = idleWorkers,
+          spcJobsPending = pendingJobs,
+          spcJobsRunning = (jobId, job) : spcJobsRunning state
+        }
+      io $ sendToWorker worker (MsgWorkerJob jobId job)
+      schedule  -- Continue scheduling
+    _ -> return ()
+
+-- | Helper function: Send a message to a worker.
+sendToWorker :: Worker -> WorkerMsg -> IO ()
+sendToWorker (Worker server) msg = sendTo server msg
 
 jobDone :: JobId -> JobDoneReason -> SPCM ()
 jobDone = undefined
@@ -206,6 +231,34 @@ handleMsg c = do
         (_, Just _, _) -> JobRunning
         (_, _, Just r) -> JobDone r
         _ -> JobUnknown
+    -- New case: Adding a worker
+    MsgWorkerAdd workerName rsvp -> do
+      state <- get
+      if any ((== workerName) . fst) (spcWorkers state)
+        then io $ reply rsvp $ Left $ "Worker " ++ workerName ++ " already exists."
+        else do
+          workerServer <- io $ spawn $ \workerChan -> workerProcess workerName c workerChan
+          let worker = Worker workerServer
+          modify $ \s -> s
+            { spcWorkers = (workerName, worker) : spcWorkers s,
+              spcIdleWorkers = workerName : spcIdleWorkers s
+            }
+          io $ reply rsvp $ Right worker
+    -- New case: Worker becomes idle
+    MsgWorkerIdle workerName -> do
+      modify $ \s -> s { spcIdleWorkers = workerName : spcIdleWorkers s }
+      schedule
+
+    -- New case: Worker reports job completion
+    MsgJobDone jobId reason workerName -> do
+      modify $ \s -> s
+        { spcJobsRunning = removeAssoc jobId (spcJobsRunning s),
+          spcJobsDone = (jobId, reason) : spcJobsDone s
+        }
+      jobDone jobId reason
+      modify $ \s -> s { spcIdleWorkers = workerName : spcIdleWorkers s }
+      schedule
+    _ -> return ()  -- Handle unexpected messages
 
 startSPC :: IO SPC
 startSPC = do
@@ -214,7 +267,9 @@ startSPC = do
           { spcJobCounter = JobId 0,
             spcJobsPending = [],
             spcJobsRunning = [],
-            spcJobsDone = []
+            spcJobsDone = [],
+            spcWorkers = [],
+            spcIdleWorkers = []
           }
   c <- spawn $ \c -> runSPCM initial_state $ forever $ handleMsg c
   void $ spawn $ timer c
@@ -247,9 +302,29 @@ jobCancel (SPC c) jobid =
 -- | Add a new worker with this name. Fails with 'Left' if a worker
 -- with that name already exists.
 workerAdd :: SPC -> WorkerName -> IO (Either String Worker)
-workerAdd = undefined
+workerAdd (SPC c) workerName = requestReply c $ MsgWorkerAdd workerName
 
 -- | Shut down a running worker. No effect if the worker is already
 -- terminated.
 workerStop :: Worker -> IO ()
 workerStop = undefined
+
+workerProcess :: WorkerName -> Chan SPCMsg -> Chan WorkerMsg -> IO ()
+workerProcess workerName spcChan workerChan = do
+  -- Notify SPC that the worker is idle
+  send spcChan (MsgWorkerIdle workerName)
+  workerLoop
+  where
+    workerLoop = do
+      msg <- receive workerChan
+      case msg of
+        MsgWorkerJob jobId job -> do
+          -- Execute the job action
+          jobAction job
+          -- Notify SPC that the job is done
+          send spcChan (MsgJobDone jobId Done workerName)
+          -- Worker becomes idle again
+          send spcChan (MsgWorkerIdle workerName)
+          -- Continue looping
+          workerLoop
+        MsgWorkerTerminate -> return () -- Exit loop
