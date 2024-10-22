@@ -31,11 +31,20 @@ tests =
           spc <- startSPC
           _ <- workerAdd spc "worker1"
           resultVar <- newIORef False
-          let job = Job { jobAction = writeIORef resultVar True, jobMaxSeconds = 10 }
+          let job = Job { jobAction = writeIORef resultVar True, jobMaxSeconds = 1 }
           _ <- jobAdd spc job
-          threadDelay 10000  -- Wait for job to complete
+          threadDelay 1000  -- Wait for job to complete
           result <- readIORef resultVar
           result @?= True
 
-      
+      , testCase "job cancellation" $ do
+          spc <- startSPC
+          _ <- workerAdd spc "worker1"
+          resultVar <- newIORef False
+          let job = Job { jobAction = writeIORef resultVar True, jobMaxSeconds = 1 }
+          jobId <- jobAdd spc job
+          jobCancel spc jobId
+          threadDelay 1000
+          result <- readIORef resultVar
+          result @?= False
       ]

@@ -191,7 +191,11 @@ sendToWorker :: Worker -> WorkerMsg -> IO ()
 sendToWorker (Worker server) msg = sendTo server msg
 
 jobDone :: JobId -> JobDoneReason -> SPCM ()
-jobDone = undefined
+jobDone jobId reason = do
+  modify $ \s -> s
+    { spcJobsRunning = removeAssoc jobId (spcJobsRunning s),
+      spcJobsDone = (jobId, reason) : spcJobsDone s
+    }
 
 workerIsIdle :: WorkerName -> Worker -> SPCM ()
 workerIsIdle = undefined
@@ -258,6 +262,19 @@ handleMsg c = do
       jobDone jobId reason
       modify $ \s -> s { spcIdleWorkers = workerName : spcIdleWorkers s }
       schedule
+    MsgJobCancel jobid -> do
+      state <- get
+      case lookup jobid (spcJobsRunning state) of
+        Just _ -> do
+          let workerName = head [name | (name, Worker server) <- spcWorkers state, jobid `elem` map fst (spcJobsRunning state)]
+          let Just worker = lookup workerName (spcWorkers state)
+          io $ sendToWorker worker MsgWorkerTerminate
+          modify $ \s -> s
+            { spcJobsRunning = removeAssoc jobid (spcJobsRunning s),
+              spcJobsDone = (jobid, DoneCancelled) : spcJobsDone s
+            }
+          jobDone jobid DoneCancelled
+        Nothing -> return ()  -- Job is not running, nothing to cancel
     _ -> return ()  -- Handle unexpected messages
 
 startSPC :: IO SPC
