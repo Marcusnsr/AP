@@ -15,19 +15,29 @@ module SPC
 
     -- * Worker functions
     WorkerName,
+    Worker (..),
     workerAdd,
-    workerStop,
   )
 where
 
 import Control.Concurrent
-  ( forkIO,
+  ( Chan,
+    ThreadId,
+    forkIO,
     killThread,
     threadDelay,
   )
-import Control.Monad (ap, forever, liftM, void)
+import Control.Exception
+  ( AsyncException (ThreadKilled),
+    SomeException,
+    catch,
+    fromException,
+  )
+import Control.Monad (ap, forM_, forever, liftM, void)
+import Data.List (find, partition)
 import GenServer
 import System.Clock.Seconds (Clock (Monotonic), Seconds, getTime)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, tryTakeMVar)
 
 -- First some general utility functions.
 
@@ -66,8 +76,7 @@ data JobDoneReason
     Done
   | -- | The job was killed because it ran for too long.
     DoneTimeout
-  | -- | The job was explicitly cancelled, or the worker
-    -- it was running on was stopped.
+  | -- | The job was explicitly cancelled.
     DoneCancelled
   | -- | The job crashed due to an exception.
     DoneCrashed
@@ -81,20 +90,14 @@ data JobStatus
     JobRunning
   | -- | The job is enqueued, but is waiting for an idle worker.
     JobPending
-  | -- | A job with this ID is not known to this SPC instance.
-    JobUnknown
   deriving (Eq, Ord, Show)
 
--- | A worker decides its own human-readable name. This is useful for
--- debugging.
+-- | A name for a worker.
 type WorkerName = String
 
--- | Messages sent to workers. These are sent both by SPC and by
--- processes spawned by the workes.
--- Messages sent to workers.
-data WorkerMsg
-  = MsgWorkerJob JobId Job
-  | MsgWorkerTerminate
+-- | A handle to a worker.
+data Worker = Worker WorkerName
+  deriving (Eq, Show)
 
 -- Messages sent to SPC.
 data SPCMsg
@@ -103,31 +106,49 @@ data SPCMsg
   | -- | Cancel the given job.
     MsgJobCancel JobId
   | -- | Immediately reply the status of the job.
-    MsgJobStatus JobId (ReplyChan JobStatus)
+    MsgJobStatus JobId (ReplyChan (Maybe JobStatus))
   | -- | Reply when the job is done.
-    MsgJobWait JobId (ReplyChan JobDoneReason)
+    MsgJobWait JobId (ReplyChan (Maybe JobDoneReason))
   | -- | Some time has passed.
     MsgTick
-  -- New messages for workers
-  | MsgWorkerAdd WorkerName (ReplyChan (Either String Worker))
-  | MsgWorkerIdle WorkerName
-  | MsgJobDone JobId JobDoneReason WorkerName
+  | -- | Add a worker.
+    MsgWorkerAdd WorkerName (ReplyChan (Either String Worker))
+  | -- | Worker reports job is done.
+    MsgWorkerDone WorkerName JobId JobDoneReason
 
--- | A handle to the SPC instance.
+-- Messages sent to Workers.
+data WorkerMsg
+  = -- | Assign a job to the worker.
+    MsgDoJob JobId Job
+  | -- | Cancel the job with the given JobId and reason.
+    MsgCancelJob JobId JobDoneReason
+
+-- | A Handle to the SPC instance.
 data SPC = SPC (Server SPCMsg)
 
--- | A handle to a worker.
-data Worker = Worker (Server WorkerMsg)
-
--- | The central state. Must be protected from the bourgeoisie.
+-- | The central state.
 data SPCState = SPCState
-  { spcJobsPending :: [(JobId, Job)],
-    spcJobsRunning :: [(JobId, Job)],
+  { spcChan :: Chan SPCMsg,
+    spcJobsPending :: [(JobId, Job)],
+    spcJobsRunning :: [RunningJob],
     spcJobsDone :: [(JobId, JobDoneReason)],
+    -- | These are waiting for this job to terminate.
+    spcWaiting :: [(JobId, ReplyChan (Maybe JobDoneReason))],
     spcJobCounter :: JobId,
-    -- New fields for workers
-    spcWorkers :: [(WorkerName, Worker)],
-    spcIdleWorkers :: [WorkerName]
+    spcWorkers :: [(WorkerName, WorkerStatus, Server WorkerMsg)]
+  }
+
+-- | The status of a worker.
+data WorkerStatus
+  = Idle
+  | Busy JobId
+
+-- | Information about a running job.
+data RunningJob = RunningJob
+  { rjJobId :: JobId,
+    rjWorkerName :: WorkerName,
+    rjStartTime :: Seconds,
+    rjMaxSeconds :: Int
   }
 
 -- | The monad in which the main SPC thread runs. This is a state
@@ -155,12 +176,6 @@ get = SPCM $ \state -> pure (state, state)
 put :: SPCState -> SPCM ()
 put state = SPCM $ \_ -> pure ((), state)
 
--- | Modify the state.
-modify :: (SPCState -> SPCState) -> SPCM ()
-modify f = do
-  state <- get
-  put $ f state
-
 -- | Lift an 'IO' action into 'SPCM'.
 io :: IO a -> SPCM a
 io m = SPCM $ \state -> do
@@ -174,44 +189,82 @@ runSPCM state (SPCM f) = fst <$> f state
 schedule :: SPCM ()
 schedule = do
   state <- get
-  case (spcIdleWorkers state, spcJobsPending state) of
-    (workerName : idleWorkers, (jobId, job) : pendingJobs) -> do
-      let Just worker = lookup workerName (spcWorkers state)
-      put $ state
-        { spcIdleWorkers = idleWorkers,
-          spcJobsPending = pendingJobs,
-          spcJobsRunning = (jobId, job) : spcJobsRunning state
-        }
-      io $ sendToWorker worker (MsgWorkerJob jobId job)
-      schedule  -- Continue scheduling
-    _ -> return ()
+  case (findIdleWorker (spcWorkers state), spcJobsPending state) of
+    (Just (wname, wserver), (jobid, job) : jobs) -> do
+      -- Send job to worker
+      io $ sendTo wserver $ MsgDoJob jobid job
+      -- Update worker status to Busy
+      let workers' = updateWorkerStatus wname (Busy jobid) (spcWorkers state)
+      -- Update jobs running
+      now <- io getSeconds
+      let runningJob = RunningJob jobid wname now (jobMaxSeconds job)
+      let jobsRunning' = runningJob : spcJobsRunning state
+      put $
+        state
+          { spcWorkers = workers',
+            spcJobsPending = jobs,
+            spcJobsRunning = jobsRunning'
+          }
+    _ -> pure ()
 
--- | Helper function: Send a message to a worker.
-sendToWorker :: Worker -> WorkerMsg -> IO ()
-sendToWorker (Worker server) msg = sendTo server msg
+-- Helper functions for worker management
+findIdleWorker :: [(WorkerName, WorkerStatus, Server WorkerMsg)] -> Maybe (WorkerName, Server WorkerMsg)
+findIdleWorker [] = Nothing
+findIdleWorker ((wname, Idle, wserver) : ws) = Just (wname, wserver)
+findIdleWorker (_ : ws) = findIdleWorker ws
 
+updateWorkerStatus :: WorkerName -> WorkerStatus -> [(WorkerName, WorkerStatus, Server WorkerMsg)] -> [(WorkerName, WorkerStatus, Server WorkerMsg)]
+updateWorkerStatus wname newStatus [] = []
+updateWorkerStatus wname newStatus ((wn, ws, srv) : rest)
+  | wname == wn = (wn, newStatus, srv) : rest
+  | otherwise = (wn, ws, srv) : updateWorkerStatus wname newStatus rest
+
+lookupWorker :: WorkerName -> [(WorkerName, WorkerStatus, Server WorkerMsg)] -> Maybe (WorkerStatus, Server WorkerMsg)
+lookupWorker wname [] = Nothing
+lookupWorker wname ((wn, ws, srv) : rest)
+  | wname == wn = Just (ws, srv)
+  | otherwise = lookupWorker wname rest
+
+removeRunningJob :: JobId -> [RunningJob] -> [RunningJob]
+removeRunningJob jid = filter (\rj -> rjJobId rj /= jid)
+
+-- Precondition: 'jobid' is currently running.
 jobDone :: JobId -> JobDoneReason -> SPCM ()
-jobDone jobId reason = do
-  modify $ \s -> s
-    { spcJobsRunning = removeAssoc jobId (spcJobsRunning s),
-      spcJobsDone = (jobId, reason) : spcJobsDone s
-    }
-
-workerIsIdle :: WorkerName -> Worker -> SPCM ()
-workerIsIdle = undefined
-
-workerIsGone :: WorkerName -> SPCM ()
-workerIsGone = undefined
+jobDone jobid reason = do
+  state <- get
+  case lookup jobid $ spcJobsDone state of
+    Just _ ->
+      -- We already know this job is done.
+      pure ()
+    Nothing -> do
+      let (waiting_for_job, not_waiting_for_job) =
+            partition ((== jobid) . fst) (spcWaiting state)
+      forM_ waiting_for_job $ \(_, rsvp) ->
+        io $ reply rsvp $ Just reason
+      let jobsRunning' = removeRunningJob jobid $ spcJobsRunning state
+      put $
+        state
+          { spcWaiting = not_waiting_for_job,
+            spcJobsDone = (jobid, reason) : spcJobsDone state,
+            spcJobsRunning = jobsRunning'
+          }
 
 checkTimeouts :: SPCM ()
-checkTimeouts = pure () -- change in Task 4
-
-workerExists :: WorkerName -> SPCM Bool
-workerExists = undefined
+checkTimeouts = do
+  state <- get
+  now <- io getSeconds
+  let (timedOutJobs, stillRunningJobs) = partition (\rj -> now - rjStartTime rj >= fromIntegral (rjMaxSeconds rj)) (spcJobsRunning state)
+  forM_ timedOutJobs $ \rj -> do
+    -- Send MsgCancelJob to the worker
+    let wname = rjWorkerName rj
+    case lookupWorker wname (spcWorkers state) of
+      Just (_, wserver) -> io $ sendTo wserver $ MsgCancelJob (rjJobId rj) DoneTimeout
+      Nothing -> pure () -- Worker not found
+  -- Update spcJobsRunning
+  put $ state { spcJobsRunning = stillRunningJobs }
 
 handleMsg :: Chan SPCMsg -> SPCM ()
 handleMsg c = do
-  checkTimeouts
   schedule
   msg <- io $ receive c
   case msg of
@@ -227,87 +280,125 @@ handleMsg c = do
       io $ reply rsvp $ JobId jobid
     MsgJobStatus jobid rsvp -> do
       state <- get
-      io $ reply rsvp $ case ( lookup jobid $ spcJobsPending state,
-                               lookup jobid $ spcJobsRunning state,
-                               lookup jobid $ spcJobsDone state
-                             ) of
-        (Just _, _, _) -> JobPending
-        (_, Just _, _) -> JobRunning
-        (_, _, Just r) -> JobDone r
-        _ -> JobUnknown
-    -- New case: Adding a worker
-    MsgWorkerAdd workerName rsvp -> do
+      io $
+        reply rsvp $
+          case
+            ( lookup jobid $ spcJobsPending state,
+              find (\rj -> rjJobId rj == jobid) $ spcJobsRunning state,
+              lookup jobid $ spcJobsDone state
+            ) of
+            (Just _, _, _) -> Just JobPending
+            (_, Just _, _) -> Just JobRunning
+            (_, _, Just r) -> Just $ JobDone r
+            _ -> Nothing
+    MsgJobWait jobid rsvp -> do
       state <- get
-      if any ((== workerName) . fst) (spcWorkers state)
-        then io $ reply rsvp $ Left $ "Worker " ++ workerName ++ " already exists."
-        else do
-          workerServer <- io $ spawn $ \workerChan -> workerProcess workerName c workerChan
-          let worker = Worker workerServer
-          modify $ \s -> s
-            { spcWorkers = (workerName, worker) : spcWorkers s,
-              spcIdleWorkers = workerName : spcIdleWorkers s
-            }
-          io $ reply rsvp $ Right worker
-    -- New case: Worker becomes idle
-    MsgWorkerIdle workerName -> do
-      modify $ \s -> s { spcIdleWorkers = workerName : spcIdleWorkers s }
-      schedule
-
-    -- New case: Worker reports job completion
-    MsgJobDone jobId reason workerName -> do
-      modify $ \s -> s
-        { spcJobsRunning = removeAssoc jobId (spcJobsRunning s),
-          spcJobsDone = (jobId, reason) : spcJobsDone s
-        }
-      jobDone jobId reason
-      modify $ \s -> s { spcIdleWorkers = workerName : spcIdleWorkers s }
-      schedule
-    MsgJobCancel jobid -> do
+      case lookup jobid $ spcJobsDone state of
+        Just reason -> do
+          io $ reply rsvp $ Just reason
+        Nothing ->
+          put $ state {spcWaiting = (jobid, rsvp) : spcWaiting state}
+    MsgJobCancel cancel_jobid -> do
       state <- get
-      case lookup jobid (spcJobsRunning state) of
+      case lookup cancel_jobid $ spcJobsPending state of
         Just _ -> do
-          let workerName = head [name | (name, Worker server) <- spcWorkers state, jobid `elem` map fst (spcJobsRunning state)]
-          let Just worker = lookup workerName (spcWorkers state)
-          io $ sendToWorker worker MsgWorkerTerminate
-          modify $ \s -> s
-            { spcJobsRunning = removeAssoc jobid (spcJobsRunning s),
-              spcJobsDone = (jobid, DoneCancelled) : spcJobsDone s
-            }
-          jobDone jobid DoneCancelled
-        Nothing -> return ()  -- Job is not running, nothing to cancel
-    _ -> return ()  -- Handle unexpected messages
+          -- Job is pending, remove it from pending list
+          let jobsPending' = removeAssoc cancel_jobid $ spcJobsPending state
+          put $ state {spcJobsPending = jobsPending'}
+          jobDone cancel_jobid DoneCancelled
+        Nothing ->
+          case find (\rj -> rjJobId rj == cancel_jobid) $ spcJobsRunning state of
+            Just rj -> do
+              -- Job is running, send cancellation to worker
+              let wname = rjWorkerName rj
+              case lookupWorker wname $ spcWorkers state of
+                Just (_, wserver) -> do
+                  io $ sendTo wserver $ MsgCancelJob cancel_jobid DoneCancelled
+                Nothing -> pure () -- Worker not found
+            Nothing ->
+              -- Job is not found, may have already completed
+              pure ()
+    MsgWorkerDone wname jobid reason -> do
+      state <- get
+      let workers' = updateWorkerStatus wname Idle (spcWorkers state)
+      put $ state {spcWorkers = workers'}
+      jobDone jobid reason
+    MsgTick -> do
+      checkTimeouts
+    MsgWorkerAdd wname rsvp -> do
+      state <- get
+      case lookupWorker wname (spcWorkers state) of
+        Just _ -> do
+          io $ reply rsvp $ Left $ "Worker with name " ++ wname ++ " already exists."
+        Nothing -> do
+          workerServer <- io $ spawn (workerProcess (spcChan state) wname Nothing)
+          let worker = Worker wname
+          let workers' = (wname, Idle, workerServer) : spcWorkers state
+          put $ state {spcWorkers = workers'}
+          io $ reply rsvp $ Right worker
+
+workerProcess :: Chan SPCMsg -> WorkerName -> Maybe (JobId, ThreadId, MVar JobDoneReason) -> Chan WorkerMsg -> IO ()
+workerProcess spcChan wname mRunningJob workerChan = do
+  msg <- receive workerChan
+  case msg of
+    MsgDoJob jobid job -> do
+      cancellationReasonVar <- newEmptyMVar
+      tid <- forkIO $ do
+        let doJob = do
+              jobAction job
+              send spcChan $ MsgWorkerDone wname jobid Done
+            onException :: SomeException -> IO ()
+            onException e = do
+              mReason <- tryTakeMVar cancellationReasonVar
+              case mReason of
+                Just reason -> send spcChan $ MsgWorkerDone wname jobid reason
+                Nothing -> case fromException e of
+                  Just ThreadKilled -> send spcChan $ MsgWorkerDone wname jobid DoneCancelled
+                  _ -> send spcChan $ MsgWorkerDone wname jobid DoneCrashed
+        doJob `catch` onException
+      workerProcess spcChan wname (Just (jobid, tid, cancellationReasonVar)) workerChan
+    MsgCancelJob jobid reason -> do
+      case mRunningJob of
+        Just (runningJobId, tid, cancellationReasonVar) | runningJobId == jobid -> do
+          putMVar cancellationReasonVar reason
+          killThread tid
+          workerProcess spcChan wname Nothing workerChan
+        _ -> workerProcess spcChan wname mRunningJob workerChan
 
 startSPC :: IO SPC
 startSPC = do
-  let initial_state =
+  let initial_state c =
         SPCState
           { spcJobCounter = JobId 0,
             spcJobsPending = [],
             spcJobsRunning = [],
             spcJobsDone = [],
+            spcWaiting = [],
             spcWorkers = [],
-            spcIdleWorkers = []
+            spcChan = c
           }
-  c <- spawn $ \c -> runSPCM initial_state $ forever $ handleMsg c
-  void $ spawn $ timer c
-  pure $ SPC c
+  server <- spawn $ \c -> runSPCM (initial_state c) $ forever $ handleMsg c
+  void $ spawn $ timer server
+  pure $ SPC server
   where
-    timer c _ = forever $ do
+    timer server _ = forever $ do
       threadDelay 1000000 -- 1 second
-      sendTo c MsgTick
+      sendTo server MsgTick
 
 -- | Add a job for scheduling.
 jobAdd :: SPC -> Job -> IO JobId
 jobAdd (SPC c) job =
   requestReply c $ MsgJobAdd job
 
--- | Asynchronously query the job status.
-jobStatus :: SPC -> JobId -> IO JobStatus
+-- | Query the job status. Returns 'Nothing' if job is not known to
+-- this SPC instance.
+jobStatus :: SPC -> JobId -> IO (Maybe JobStatus)
 jobStatus (SPC c) jobid =
   requestReply c $ MsgJobStatus jobid
 
 -- | Synchronously block until job is done and return the reason.
-jobWait :: SPC -> JobId -> IO JobDoneReason
+-- Returns 'Nothing' if job is not known to this SPC instance.
+jobWait :: SPC -> JobId -> IO (Maybe JobDoneReason)
 jobWait (SPC c) jobid =
   requestReply c $ MsgJobWait jobid
 
@@ -316,32 +407,7 @@ jobCancel :: SPC -> JobId -> IO ()
 jobCancel (SPC c) jobid =
   sendTo c $ MsgJobCancel jobid
 
--- | Add a new worker with this name. Fails with 'Left' if a worker
--- with that name already exists.
+-- | Add a worker to SPC.
 workerAdd :: SPC -> WorkerName -> IO (Either String Worker)
-workerAdd (SPC c) workerName = requestReply c $ MsgWorkerAdd workerName
-
--- | Shut down a running worker. No effect if the worker is already
--- terminated.
-workerStop :: Worker -> IO ()
-workerStop = undefined
-
-workerProcess :: WorkerName -> Chan SPCMsg -> Chan WorkerMsg -> IO ()
-workerProcess workerName spcChan workerChan = do
-  -- Notify SPC that the worker is idle
-  send spcChan (MsgWorkerIdle workerName)
-  workerLoop
-  where
-    workerLoop = do
-      msg <- receive workerChan
-      case msg of
-        MsgWorkerJob jobId job -> do
-          -- Execute the job action
-          jobAction job
-          -- Notify SPC that the job is done
-          send spcChan (MsgJobDone jobId Done workerName)
-          -- Worker becomes idle again
-          send spcChan (MsgWorkerIdle workerName)
-          -- Continue looping
-          workerLoop
-        MsgWorkerTerminate -> return () -- Exit loop
+workerAdd (SPC c) wname =
+  requestReply c $ MsgWorkerAdd wname
