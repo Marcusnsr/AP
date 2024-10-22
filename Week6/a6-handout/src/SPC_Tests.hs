@@ -9,7 +9,7 @@ import Test.Tasty.HUnit (testCase, (@?=))
 
 tests :: TestTree
 tests =
-  localOption (mkTimeout 10000000) $ -- Increased timeout to accommodate longer tests
+  localOption (mkTimeout 10000000) $
     testGroup
       "SPC"
       [ testCase "simple-job" $ do
@@ -67,22 +67,20 @@ tests =
           r2 <- jobWait spc j
           r2 @?= Just DoneCancelled
           v <- readIORef ref
-          v @?= False, -- The job should not have run
+          v @?= False, 
         testCase "cancel-running-job" $ do
           spc <- startSPC
           workerAdd spc "worker1"
           ref <- newIORef False
-          -- A job that takes some time to run
           j <- jobAdd spc $ Job (do threadDelay 2000000; writeIORef ref True) 3
-          -- Wait a bit to ensure the job is running
-          threadDelay 500000 -- 0.5 seconds
+          threadDelay 500000
           r1 <- jobStatus spc j
           r1 @?= Just JobRunning
           jobCancel spc j
           r2 <- jobWait spc j
           r2 @?= Just DoneCancelled
           v <- readIORef ref
-          v @?= False, -- The job should have been cancelled before writing to ref
+          v @?= False,
         testCase "cancel-completed-job" $ do
           spc <- startSPC
           workerAdd spc "worker1"
@@ -94,18 +92,18 @@ tests =
           r2 <- jobStatus spc j
           r2 @?= Just (JobDone Done)
           v <- readIORef ref
-          v @?= True, -- Job should have run
+          v @?= True, 
         testCase "cancel-already-cancelled-job" $ do
           spc <- startSPC
           -- No workers added, so the job remains pending
           ref <- newIORef False
           j <- jobAdd spc $ Job (writeIORef ref True) 1
           jobCancel spc j
-          jobCancel spc j -- Cancel again
+          jobCancel spc j 
           r <- jobWait spc j
           r @?= Just DoneCancelled
           v <- readIORef ref
-          v @?= False, -- Job should not have run
+          v @?= False, 
         testCase "cancel-multiple-jobs" $ do
           spc <- startSPC
           workerAdd spc "worker1"
@@ -113,14 +111,13 @@ tests =
           ref <- newIORef (0 :: Int)
           let num_jobs = 5
           js <- replicateM num_jobs $ jobAdd spc $ Job (do threadDelay 2000000; modifyIORef ref (+1)) 3
-          -- Wait a bit to ensure jobs are running
           threadDelay 100000
           -- Cancel all jobs
           mapM_ (jobCancel spc) js
           rs <- mapM (jobWait spc) js
           rs @?= replicate num_jobs (Just DoneCancelled)
           v <- readIORef ref
-          v @?= 0, -- None of the jobs should have incremented ref
+          v @?= 0,
         testCase "cancel-job-after-completion" $ do
           spc <- startSPC
           workerAdd spc "worker1"
@@ -128,63 +125,58 @@ tests =
           j <- jobAdd spc $ Job (writeIORef ref True) 1
           r1 <- jobWait spc j
           r1 @?= Just Done
-          jobCancel spc j -- Cancelling after completion should have no effect
+          jobCancel spc j
           r2 <- jobStatus spc j
           r2 @?= Just (JobDone Done)
           v <- readIORef ref
           v @?= True,
-        -- New test cases for timeout functionality
+        -- test cases for timeout functionality
         testCase "job-times-out" $ do
           spc <- startSPC
           workerAdd spc "worker1"
           ref <- newIORef False
-          -- Job that sleeps longer than its max allowed runtime
-          j <- jobAdd spc $ Job (do threadDelay 3000000; writeIORef ref True) 1 -- Max 1 second
+          j <- jobAdd spc $ Job (do threadDelay 3000000; writeIORef ref True) 1
           r <- jobWait spc j
           r @?= Just DoneTimeout
           v <- readIORef ref
-          v @?= False, -- The job should not have completed
+          v @?= False,
         testCase "job-completes-before-timeout" $ do
           spc <- startSPC
           workerAdd spc "worker1"
           ref <- newIORef False
-          -- Job that completes just before timeout
-          j <- jobAdd spc $ Job (do threadDelay 500000; writeIORef ref True) 2 -- Max 2 seconds
+          j <- jobAdd spc $ Job (do threadDelay 500000; writeIORef ref True) 2 
           r <- jobWait spc j
           r @?= Just Done
           v <- readIORef ref
-          v @?= True, -- The job should have completed
+          v @?= True,
         testCase "multiple-jobs-with-timeouts" $ do
           spc <- startSPC
           workerAdd spc "worker1"
           workerAdd spc "worker2"
           ref <- newIORef (0 :: Int)
-          -- Jobs with varying runtimes and timeouts
-          let jobs = [ (1000000, 2),  -- Sleep 1s, timeout 2s
-                       (3000000, 1),  -- Sleep 3s, timeout 1s (should timeout)
-                       (500000, 1),   -- Sleep 0.5s, timeout 1s
-                       (4000000, 3) ] -- Sleep 4s, timeout 3s (should timeout)
+          let jobs = [ (1000000, 2),
+                       (3000000, 1),
+                       (500000, 1),
+                       (4000000, 3) ]
           js <- mapM (\(sleepTime, maxTime) ->
                         jobAdd spc $ Job (do threadDelay sleepTime; modifyIORef ref (+1)) maxTime) jobs
           rs <- mapM (jobWait spc) js
           rs @?= [Just Done, Just DoneTimeout, Just Done, Just DoneTimeout]
           v <- readIORef ref
-          v @?= 2, -- Only the jobs that didn't timeout incremented ref
+          v @?= 2, 
         testCase "worker-handles-timeout-and-accepts-new-job" $ do
           spc <- startSPC
           workerAdd spc "worker1"
           ref1 <- newIORef False
           ref2 <- newIORef False
-          -- First job that will timeout
-          j1 <- jobAdd spc $ Job (do threadDelay 3000000; writeIORef ref1 True) 1 -- Max 1 second
+          j1 <- jobAdd spc $ Job (do threadDelay 3000000; writeIORef ref1 True) 1
           r1 <- jobWait spc j1
           r1 @?= Just DoneTimeout
           v1 <- readIORef ref1
-          v1 @?= False -- Job should not have completed
-          -- Second job that should run normally
+          v1 @?= False
           j2 <- jobAdd spc $ Job (writeIORef ref2 True) 2
           r2 <- jobWait spc j2
           r2 @?= Just Done
           v2 <- readIORef ref2
-          v2 @?= True -- Job should have completed
+          v2 @?= True
         ]
