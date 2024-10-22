@@ -105,7 +105,7 @@ data SPCMsg
     MsgJobAdd Job (ReplyChan JobId)
   | -- | Cancel the given job.
     MsgJobCancel JobId
-  | -- | Immediately reply the status of the job.
+  | -- | reply the status of the job.
     MsgJobStatus JobId (ReplyChan (Maybe JobStatus))
   | -- | Reply when the job is done.
     MsgJobWait JobId (ReplyChan (Maybe JobDoneReason))
@@ -176,7 +176,7 @@ get = SPCM $ \state -> pure (state, state)
 put :: SPCState -> SPCM ()
 put state = SPCM $ \_ -> pure ((), state)
 
--- | Lift an 'IO' action into 'SPCM'.
+-- | Lift an IO into SPCM
 io :: IO a -> SPCM a
 io m = SPCM $ \state -> do
   x <- m
@@ -228,7 +228,6 @@ lookupWorker wname ((wn, ws, srv) : rest)
 removeRunningJob :: JobId -> [RunningJob] -> [RunningJob]
 removeRunningJob jid = filter (\rj -> rjJobId rj /= jid)
 
--- Precondition: 'jobid' is currently running.
 jobDone :: JobId -> JobDoneReason -> SPCM ()
 jobDone jobid reason = do
   state <- get
@@ -260,7 +259,6 @@ checkTimeouts = do
     case lookupWorker wname (spcWorkers state) of
       Just (_, wserver) -> io $ sendTo wserver $ MsgCancelJob (rjJobId rj) DoneTimeout
       Nothing -> pure () -- Worker not found
-  -- Update spcJobsRunning
   put $ state { spcJobsRunning = stillRunningJobs }
 
 handleMsg :: Chan SPCMsg -> SPCM ()
@@ -382,32 +380,32 @@ startSPC = do
   pure $ SPC server
   where
     timer server _ = forever $ do
-      threadDelay 1000000 -- 1 second
+      threadDelay 1000000
       sendTo server MsgTick
 
--- | Add a job for scheduling.
+-- | Add a job for scheduling
 jobAdd :: SPC -> Job -> IO JobId
 jobAdd (SPC c) job =
   requestReply c $ MsgJobAdd job
 
 -- | Query the job status. Returns 'Nothing' if job is not known to
--- this SPC instance.
+-- this SPC instance
 jobStatus :: SPC -> JobId -> IO (Maybe JobStatus)
 jobStatus (SPC c) jobid =
   requestReply c $ MsgJobStatus jobid
 
--- | Synchronously block until job is done and return the reason.
--- Returns 'Nothing' if job is not known to this SPC instance.
+-- | Synchronously block until job is done and return the reason
+-- Returns 'Nothing' if job is not known to this SPC instance
 jobWait :: SPC -> JobId -> IO (Maybe JobDoneReason)
 jobWait (SPC c) jobid =
   requestReply c $ MsgJobWait jobid
 
--- | Asynchronously cancel a job.
+-- | Asynchronously cancel a job
 jobCancel :: SPC -> JobId -> IO ()
 jobCancel (SPC c) jobid =
   sendTo c $ MsgJobCancel jobid
 
--- | Add a worker to SPC.
+-- | Add a worker to SPC
 workerAdd :: SPC -> WorkerName -> IO (Either String Worker)
 workerAdd (SPC c) wname =
   requestReply c $ MsgWorkerAdd wname
